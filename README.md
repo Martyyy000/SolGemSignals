@@ -4,7 +4,7 @@ This guide assumes zero prior experience. Follow it top to bottom.
 
 ## What this bot does
 
-- Checks pump.fun every 5 minutes for the newest tokens
+- Checks for the newest pump.fun tokens every 20 minutes (via a stable third-party data API — see Step 3a)
 - Picks the top 3 by trading volume/market cap
 - Posts a formatted signal to your Telegram channel (never posts the same token twice, even after a restart)
 - Includes `/buy` and `/sell` commands that simulate a trade and show a 1% platform fee
@@ -62,6 +62,19 @@ You don't need to create any tables manually — the bot creates its own table a
 
 ---
 
+## Step 3a — Get your token data API key (Solana Tracker)
+
+pump.fun's own internal API has become locked-down and requires special access tokens that are impractical to obtain reliably, so this bot pulls token data from **Solana Tracker**, a documented third-party service that indexes the same on-chain pump.fun activity.
+
+1. Go to [solanatracker.io/account/data-api](https://www.solanatracker.io/account/data-api) and sign up (free, no credit card).
+2. In your dashboard sidebar, click **Data API**.
+3. Copy your API key.
+4. This is your `SOLANA_TRACKER_API_KEY`.
+
+**About the free tier:** it includes 2,500 requests/month. This bot uses 1 request per scan cycle, and defaults to scanning every 20 minutes (`SCAN_INTERVAL_SECONDS=1200`), which uses roughly 2,160 requests/month — comfortably inside the free quota with some room to spare. If you lower the interval, you may run out of requests before the month ends; check your usage in the Solana Tracker dashboard, or upgrade to a paid plan for more headroom.
+
+---
+
 ## Step 4 — Get your Trojan affiliate link
 
 1. Open Telegram, go to **@solana_trojanbot** (or your existing Trojan referral bot).
@@ -91,7 +104,7 @@ You don't need to create any tables manually — the bot creates its own table a
    python bot.py
    ```
    (If you want `.env` to load automatically, add `from dotenv import load_dotenv; load_dotenv()` at the top of `bot.py` before the other imports — it's left out by default since cloud hosts inject env vars directly.)
-7. You should see log lines like `Bot starting. Scanning every 300 seconds...`. Check your Telegram channel after the first cycle.
+7. You should see log lines like `Bot starting. Scanning every 1200 seconds...`. Check your Telegram channel after the first cycle (or wait up to 20 minutes for it).
 
 ---
 
@@ -108,9 +121,10 @@ You don't need to create any tables manually — the bot creates its own table a
    | `TELEGRAM_BOT_TOKEN` | your token from Step 1 |
    | `TELEGRAM_CHANNEL_ID` | your channel ID from Step 2 |
    | `DATABASE_URL` | your Supabase URI from Step 3 |
+   | `SOLANA_TRACKER_API_KEY` | your API key from Step 3a |
    | `TROJAN_AFFILIATE_LINK` | your link from Step 4 |
    | `TRADE_FEE_PERCENT` | `1.0` |
-   | `SCAN_INTERVAL_SECONDS` | `300` |
+   | `SCAN_INTERVAL_SECONDS` | `1200` |
    | `TOP_N_TOKENS` | `3` |
 
 6. Go to **Settings → Deploy**, set the **Start Command** to:
@@ -118,7 +132,7 @@ You don't need to create any tables manually — the bot creates its own table a
    python bot.py
    ```
 7. Railway will redeploy automatically. Check the **Deployments → Logs** tab to confirm it's running.
-8. Your bot now runs 24/7 and posts to your channel every 5 minutes.
+8. Your bot now runs 24/7 and posts to your channel every 20 minutes.
 
 ---
 
@@ -139,9 +153,9 @@ You don't need to create any tables manually — the bot creates its own table a
 
 ## Troubleshooting
 
-- **Bot doesn't post anything:** check the logs for `pump.fun API request failed` — the unofficial API endpoint may have changed. Also confirm the bot is an admin in your channel.
-- **HTTP 530 error in logs:** this means Cloudflare couldn't reach the API subdomain at all — pump.fun likely retired/moved it again. Search GitHub for "pumpfun-apis" or "pump.fun frontend api" to find the current live subdomain, then update `PUMPFUN_API_BASE` in your environment variables (no code change needed).
-- **HTTP 401 error in logs:** the endpoint may now require an `Authorization: Bearer <JWT>` header. Check the current pump.fun API documentation/community repos for how to obtain one, then add it to `HEADERS` in `pumpfun_api.py`.
+- **Bot doesn't post anything:** check the logs for `Solana Tracker API request failed`. Also confirm the bot is an admin in your channel, and that pump.fun actually had new launches in the last cycle (quiet periods happen).
+- **HTTP 401 error in logs:** double-check `SOLANA_TRACKER_API_KEY` is set correctly and copied in full (no extra spaces).
+- **HTTP 429 error in logs:** you've hit the free-tier monthly request limit. Check your usage at solanatracker.io, raise `SCAN_INTERVAL_SECONDS`, or upgrade your plan.
 - **"Missing required environment variable" error on startup:** you forgot to set one of the required variables on your host — double check the Variables/Environment tab.
 - **Duplicate posts after redeploy:** confirm `DATABASE_URL` is actually set and pointing at Supabase, not falling back to local SQLite.
 - **/buy or /sell doesn't respond:** these only work in a private chat with the bot, not in the channel itself (bots generally can't read commands posted in channels they administer).

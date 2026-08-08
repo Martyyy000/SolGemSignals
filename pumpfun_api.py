@@ -1,13 +1,20 @@
 """
 pumpfun_api.py
 
-Talks directly to pump.fun's public frontend API to get the newest tokens -
-no Dexscreener in the loop, so there's no extra indexing delay.
+Fetches the newest Solana tokens via the Solana Tracker Data API
+(https://docs.solanatracker.io) and filters down to pump.fun launches.
 
-IMPORTANT: this is an unofficial, undocumented API that pump.fun's own
-frontend uses. It can change shape or move without notice. If token fetching
-starts failing, check the response of PUMPFUN_API_BASE + "/coins" in a
-browser/Postman and adjust the field mapping in `_normalize_token` below.
+Why not call pump.fun's own frontend API directly? pump.fun has tightened
+their internal API: the public frontend-api.pump.fun domain was retired,
+its replacement (frontend-api-v3.pump.fun) now requires an authenticated
+JWT for most endpoints, and getting that token means reverse-engineering
+their login/anti-bot flow - not something worth building a bot around.
+Solana Tracker indexes the same on-chain pump.fun activity and exposes it
+through a stable, documented, free-tier API instead.
+
+Get a free API key at https://www.solanatracker.io/account/data-api
+(2,500 requests/month on the free tier - see README for scan-interval
+guidance so you stay within that budget).
 """
 
 from __future__ import annotations
@@ -16,67 +23,55 @@ from typing import Any
 
 import httpx
 
-from config import PUMPFUN_API_BASE, logger
+from config import SOLANA_TRACKER_API_KEY, SOLANA_TRACKER_API_BASE, logger
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; SolanaSignalBot/1.0)",
+    "x-api-key": SOLANA_TRACKER_API_KEY,
     "Accept": "application/json",
 }
 
 
 async def fetch_latest_tokens(limit: int = 50) -> list[dict[str, Any]]:
     """
-    Fetch the most recently created tokens on pump.fun, newest first.
+    Fetch the most recently created tokens across Solana Tracker's indexed
+    DEXes, then filter down to pump.fun launches only.
     Returns a list of normalized token dicts. Never raises - returns []
     on any failure so a bad API response doesn't crash the scan loop.
     """
-    url = f"{PUMPFUN_API_BASE}/coins/latest"
-    params = {
-        "offset": 0,
-        "limit": limit,
-        "sort": "created_timestamp",
-        "order": "DESC",
-        "includeNsfw": "false",
-    }
+    url = f"{SOLANA_TRACKER_API_BASE}/tokens/latest"
 
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
-            response = await client.get(url, params=params)
+            response = await client.get(url, params={"page": 1})
             if response.status_code == 401:
                 logger.error(
-                    "pump.fun API returned 401 Unauthorized. This endpoint may "
-                    "now require an Authorization: Bearer <JWT> header. Check "
-                    "https://github.com/BankkRoll/pumpfun-apis for the current "
-                    "auth requirements and update HEADERS in pumpfun_api.py."
+                    "Solana Tracker API returned 401 Unauthorized. Check that "
+                    "SOLANA_TRACKER_API_KEY is set correctly in your environment."
+                )
+                return []
+            if response.status_code == 429:
+                logger.warning(
+                    "Solana Tracker API rate limit hit (429). Consider "
+                    "increasing SCAN_INTERVAL_SECONDS or upgrading your plan."
                 )
                 return []
             response.raise_for_status()
             raw_tokens = response.json()
     except httpx.HTTPError as exc:
-        logger.error("pump.fun API request failed: %s", exc)
+        logger.error("Solana Tracker API request failed: %s", exc)
         return []
     except ValueError as exc:
-        logger.error("pump.fun API returned invalid JSON: %s", exc)
+        logger.error("Solana Tracker API returned invalid JSON: %s", exc)
         return []
-
-    # The v3 endpoint may return a raw list or an object wrapping the list
-    # (e.g. {"coins": [...]} / {"data": [...]}) - handle both defensively.
-    if isinstance(raw_tokens, dict):
-        for key in ("coins", "data", "results"):
-            if isinstance(raw_tokens.get(key), list):
-                raw_tokens = raw_tokens[key]
-                break
 
     if not isinstance(raw_tokens, list):
         logger.error(
-            "Unexpected pump.fun API response shape: %s. If this persists, "
-            "inspect a live response and adjust _normalize_token/fetch_latest_tokens.",
-            type(raw_tokens),
+            "Unexpected Solana Tracker API response shape: %s", type(raw_tokens)
         )
         return []
 
     normalized = []
-    for raw in raw_tokens:
+    for raw in raw_tokens[:limit]:
         token = _normalize_token(raw)
         if token is not None:
             normalized.append(token)
@@ -85,45 +80,48 @@ async def fetch_latest_tokens(limit: int = 50) -> list[dict[str, Any]]:
 
 def _normalize_token(raw: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Maps pump.fun's raw JSON fields onto a stable internal schema so the
-    rest of the bot doesn't care about upstream field-name changes.
+    Maps a Solana Tracker TokenInfo object onto our internal schema, and
+    filters out anything that isn't actually a pump.fun launch (the Data
+    API covers Raydium, Meteora, Orca, etc. too).
     """
     try:
-        contract_address = raw.get("mint")
-        if not contract_address:
+        token_info = raw.get("token") or {}
+        pools = raw.get("pools") or []
+
+        contract_address = token_info.get("mint")
+        if not contract_address or not pools:
             return None
 
-        name = raw.get("name") or "Unknown"
-        symbol = raw.get("symbol") or "???"
+        # Only keep pools whose market is pump.fun - the same token dict
+        # can list multiple pools, so pick the pump.fun one if present.
+        pumpfun_pool = next(
+            (p for p in pools if str(p.get("market", "")).lower() == "pumpfun"),
+            None,
+        )
+        if pumpfun_pool is None:
+            return None
 
-        # pump.fun exposes market cap directly; "volume" in the strict sense
-        # isn't always present on the listing endpoint, so we fall back to
-        # a reasonable proxy (real trade volume, if provided) and clearly
-        # label it as an estimate downstream if we had to fall back.
-        market_cap_usd = float(raw.get("usd_market_cap") or 0)
-        volume_usd = raw.get("volume_24h_usd")
+        name = token_info.get("name") or "Unknown"
+        symbol = token_info.get("symbol") or "???"
+
+        market_cap_usd = float((pumpfun_pool.get("marketCap") or {}).get("usd") or 0)
+        liquidity_usd = float((pumpfun_pool.get("liquidity") or {}).get("usd") or 0)
+
+        txns = pumpfun_pool.get("txns") or {}
+        volume_usd = txns.get("volume24h", txns.get("volume"))
         volume_is_estimate = volume_usd is None
-        if volume_usd is None:
-            # Fallback proxy: rough activity signal from reserves delta if
-            # the API doesn't expose true volume on this endpoint.
-            volume_usd = float(raw.get("real_sol_reserves") or 0) * float(
-                raw.get("usd_market_cap", 0) or 0
-            ) / max(float(raw.get("virtual_sol_reserves") or 1), 1)
+        volume_usd = float(volume_usd or 0)
 
-        liquidity_usd = float(raw.get("virtual_sol_reserves") or 0) * float(
-            raw.get("sol_price_usd") or 0
-        ) if raw.get("sol_price_usd") else market_cap_usd * 0.15  # rough fallback
-
-        created_timestamp = raw.get("created_timestamp")
+        created_timestamp = (token_info.get("creation") or {}).get("created_time")
 
         return {
             "contract_address": contract_address,
             "name": name,
             "symbol": symbol,
             "market_cap_usd": market_cap_usd,
-            "volume_usd": float(volume_usd or 0),
+            "volume_usd": volume_usd,
             "volume_is_estimate": volume_is_estimate,
-            "liquidity_usd": float(liquidity_usd or 0),
+            "liquidity_usd": liquidity_usd,
             "created_timestamp": created_timestamp,
             "raw": raw,
         }

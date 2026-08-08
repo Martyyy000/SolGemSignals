@@ -41,15 +41,17 @@ TRADE_FEE_PERCENT = float(os.environ.get("TRADE_FEE_PERCENT", "1.0"))  # 1% defa
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 SQLITE_PATH = os.environ.get("SQLITE_PATH", "pumpfun_bot.db")
 
-# --- Scan behaviour ---
-SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))  # 5 minutes
-TOP_N_TOKENS = int(os.environ.get("TOP_N_TOKENS", "3"))
+# --- Solana Tracker Data API (stable, documented replacement for pump.fun's
+# own increasingly locked-down internal API) ---
+SOLANA_TRACKER_API_KEY = _require("SOLANA_TRACKER_API_KEY")
+SOLANA_TRACKER_API_BASE = os.environ.get(
+    "SOLANA_TRACKER_API_BASE", "https://data.solanatracker.io"
+)
 
-# --- pump.fun public frontend API ---
-# NOTE: this is pump.fun's public (unofficial, undocumented) frontend API.
-# It can change without notice - if the bot stops finding tokens, check
-# whether the response shape/endpoint has changed and adjust pumpfun_api.py.
-# pump.fun migrated their public frontend API from frontend-api.pump.fun to
-# frontend-api-v3.pump.fun. If this ever 404s/530s again, check
-# https://github.com/BankkRoll/pumpfun-apis for the current live domain.
-PUMPFUN_API_BASE = os.environ.get("PUMPFUN_API_BASE", "https://frontend-api-v3.pump.fun")
+# --- Scan behaviour ---
+# The Solana Tracker free tier allows 2,500 requests/month. At 1 request per
+# scan, staying under that budget needs an interval of at least ~18 minutes
+# (2500 / 30 days ≈ 83/day ≈ 1 every 17.3 min). Default is set with margin;
+# lower it only if you're on a paid plan or accept possible overage.
+SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "1200"))  # 20 min
+TOP_N_TOKENS = int(os.environ.get("TOP_N_TOKENS", "3"))
