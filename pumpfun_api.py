@@ -30,7 +30,7 @@ async def fetch_latest_tokens(limit: int = 50) -> list[dict[str, Any]]:
     Returns a list of normalized token dicts. Never raises - returns []
     on any failure so a bad API response doesn't crash the scan loop.
     """
-    url = f"{PUMPFUN_API_BASE}/coins"
+    url = f"{PUMPFUN_API_BASE}/coins/latest"
     params = {
         "offset": 0,
         "limit": limit,
@@ -42,6 +42,14 @@ async def fetch_latest_tokens(limit: int = 50) -> list[dict[str, Any]]:
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
             response = await client.get(url, params=params)
+            if response.status_code == 401:
+                logger.error(
+                    "pump.fun API returned 401 Unauthorized. This endpoint may "
+                    "now require an Authorization: Bearer <JWT> header. Check "
+                    "https://github.com/BankkRoll/pumpfun-apis for the current "
+                    "auth requirements and update HEADERS in pumpfun_api.py."
+                )
+                return []
             response.raise_for_status()
             raw_tokens = response.json()
     except httpx.HTTPError as exc:
@@ -51,8 +59,20 @@ async def fetch_latest_tokens(limit: int = 50) -> list[dict[str, Any]]:
         logger.error("pump.fun API returned invalid JSON: %s", exc)
         return []
 
+    # The v3 endpoint may return a raw list or an object wrapping the list
+    # (e.g. {"coins": [...]} / {"data": [...]}) - handle both defensively.
+    if isinstance(raw_tokens, dict):
+        for key in ("coins", "data", "results"):
+            if isinstance(raw_tokens.get(key), list):
+                raw_tokens = raw_tokens[key]
+                break
+
     if not isinstance(raw_tokens, list):
-        logger.error("Unexpected pump.fun API response shape: %s", type(raw_tokens))
+        logger.error(
+            "Unexpected pump.fun API response shape: %s. If this persists, "
+            "inspect a live response and adjust _normalize_token/fetch_latest_tokens.",
+            type(raw_tokens),
+        )
         return []
 
     normalized = []

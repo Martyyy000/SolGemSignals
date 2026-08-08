@@ -49,4 +49,7 @@ TOP_N_TOKENS = int(os.environ.get("TOP_N_TOKENS", "3"))
 # NOTE: this is pump.fun's public (unofficial, undocumented) frontend API.
 # It can change without notice - if the bot stops finding tokens, check
 # whether the response shape/endpoint has changed and adjust pumpfun_api.py.
-PUMPFUN_API_BASE = os.environ.get("PUMPFUN_API_BASE", "https://frontend-api.pump.fun")
+# pump.fun migrated their public frontend API from frontend-api.pump.fun to
+# frontend-api-v3.pump.fun. If this ever 404s/530s again, check
+# https://github.com/BankkRoll/pumpfun-apis for the current live domain.
+PUMPFUN_API_BASE = os.environ.get("PUMPFUN_API_BASE", "https://frontend-api-v3.pump.fun")

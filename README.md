@@ -140,6 +140,8 @@ You don't need to create any tables manually — the bot creates its own table a
 ## Troubleshooting
 
 - **Bot doesn't post anything:** check the logs for `pump.fun API request failed` — the unofficial API endpoint may have changed. Also confirm the bot is an admin in your channel.
+- **HTTP 530 error in logs:** this means Cloudflare couldn't reach the API subdomain at all — pump.fun likely retired/moved it again. Search GitHub for "pumpfun-apis" or "pump.fun frontend api" to find the current live subdomain, then update `PUMPFUN_API_BASE` in your environment variables (no code change needed).
+- **HTTP 401 error in logs:** the endpoint may now require an `Authorization: Bearer <JWT>` header. Check the current pump.fun API documentation/community repos for how to obtain one, then add it to `HEADERS` in `pumpfun_api.py`.
 - **"Missing required environment variable" error on startup:** you forgot to set one of the required variables on your host — double check the Variables/Environment tab.
 - **Duplicate posts after redeploy:** confirm `DATABASE_URL` is actually set and pointing at Supabase, not falling back to local SQLite.
 - **/buy or /sell doesn't respond:** these only work in a private chat with the bot, not in the channel itself (bots generally can't read commands posted in channels they administer).
